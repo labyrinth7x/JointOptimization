@@ -12,11 +12,11 @@ def get_dataset(args):
     train = Cifar10Train(args.train_root, train_indexes, train=True, transform=args.transform,)
 
     if args.dataset_type == 'sym_noise':
-        cifar10_train_val.symmetric_noise()
+        train.symmetric_noise()
     elif args.dataset_type == 'asym_noise':
-        cifar10_train_val.asymetric_noise()
+        train.asymetric_noise()
     else:
-        cifar10_train_val.pseudo_labels()
+        train.pseudo_labels()
 
     val = Cifar10Val(args.train_root, train_indexes, train=True, transform=args.transform)
     test = Cifar10Val(args.test_root, cifar10_test.test_labels[:], train=False, download=args.download)
