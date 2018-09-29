@@ -1,14 +1,19 @@
 import torch
+import torch.nn as nn
+import numpy as np
 import torchvision.transforms as transforms
 import argparse
 import logging
 import os
+import time
 from dataset.cifar10 import get_dataset
 from utils.visualize import save_fig
-from utils.criterion import accuracy
+from utils.criterion import accuracy_v2, joint_opt_loss
+from utils.AverageMeter import AverageMeter
 import torch.utils.data as data
 from torch import optim
 from models.resnet import resnet18
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -16,7 +21,6 @@ logger.setLevel(logging.INFO)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='command for the first train')
-
     parser.add_argument('--lr', type=float, default=0.1, )
     parser.add_argument('--batch_size', type=int, default=128, help='#images in each mini-batch')
     parser.add_argument('--epoch', type=int, default=200, help='training epoches')
@@ -34,6 +38,8 @@ def parse_args():
     parser.add_argument('--beta', type=float, default=0.5, help='Hyper param for loss')
 
     args = parser.parse_args()
+    return args
+
 
 def data_config(args):
     transform_train = transforms.Compose([
@@ -51,6 +57,7 @@ def data_config(args):
     val_loader = data.DataLoader(val, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
     return train_loader, val_loader
+
 
 def record(args):
     dst_folder = args.out + '/' + args.dataset_type + '-lr-{}-ratio-{}'.format(args.lr, args.noise_ratio)
@@ -83,61 +90,119 @@ def network_config(args):
 
 
 def save_checkpoint(state, dst_folder, epoch):
-
     dst = dst_folder + '/epoch-' + str(epoch) + '.pkl'
     torch.save(state, dst)
 
 
-def train(train_loader, network, optimizer, device):
+def train(train_loader, network, optimizer, device, args):
+    batch_time = AverageMeter()
+    train_loss = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    # switch to train mode
+    network.train()
+
+    end = time.time()
+
+    results = np.zeros((len(train_loader.dataset), 10), dtype=np.float32)
+
+    for batch_idx, (images, labels, soft_labels, index) in enumerate(train_loader):
+        images = images.to(device)
+        labels = labels.to(device)
+        soft_labels = soft_labels.to(device)
+
+        # compute output
+        outputs = network(images)
+        prob, loss = joint_opt_loss(outputs, soft_labels, device, args)
+
+        results[index.numpy().tolist()] = prob.numpy().tolist()
+
+        prec1, prec5 = accuracy_v2(outputs, labels, top=[1,5])
+        train_loss.update(loss.item(), images.size(0))
+        top1.update(prec1.item(), images.size(0))
+        top5.update(prec5.item(), images.size(0))
+
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    # update soft labels
+    train_loader.dataset.update_labels(results)
+
+    return train_loss.avg, top5.avg, top1.avg, batch_time.sum
 
 
-def validate(val_loader, network, optimizer, device):
-    # test the model
-    top1 = 0
-    top5 = 0
+def validate(val_loader, network, criterion, device):
+    """
+    Run evaluation
+    """
+    batch_time = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    val_loss = AverageMeter()
+
+    # switch to evaluate mode
     network.eval()
+
     with torch.no_grad():
+        end = time.time()
         for images, labels in val_loader:
             images = images.to(device)
             labels = labels.to(device)
             outputs = network(images)
-            top5_num, top1_num = accuracy(outputs, labels, top=[1,5])
-            top1 += top1_num
-            top5 += top5_num
-    return float(top5) / val_loader.__len__(), float(top1) / val_loader.__len__()
+            prec1, prec5 = accuracy_v2(outputs, labels, top=[1,5])
+            loss = criterion(outputs, labels)
+
+            top1.update(prec1.item(), images.size(0))
+            top5.update(prec5.item(), images.size(0))
+            val_loss.update(loss.item(), images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+    return top1.avg, top5.avg, batch_time.sum
 
 
 def main(args, dst_folder):
     # best_ac only record the best top1_ac for validation set.
     best_ac = 0.0
-    if not os.path.isdir(args.out):
-        os.makedirs(args.out)
 
     # data lodaer
     train_loader, val_loader = data_config(args)
+
+    # criterion
+    val_criterion = nn.CrossEntropyLoss()
 
     # network config
     network, optimizer, device = network_config(args)
 
     for epoch in range(args.epoch):
-        train_loss, train_ac = train(train_loader, network, optimizer, device)
-        top5_val_ac, top1_val_ac = validate(val_loader, network, optimizer, device)
+        # train for one epoch
+        train_loss, top_5_train_ac, top1_train_ac, train_time = train(train_loader, network, optimizer, device, args)
 
+        # evaluate on validation set
+        top5_val_ac, top1_val_ac, val_time = validate(val_loader, network, val_criterion, device)
+        # remember best prec@1, save checkpoint and logging to the console.
         if top1_val_ac >= best_ac:
-            state = {'state_dict':network.state_dict(), 'epoch':epoch, 'ac': [top5_val_ac, top1_val_ac], 'best_ac':best_ac}
+            state = {'state_dict': network.state_dict(), 'epoch': epoch, 'ac': [top5_val_ac, top1_val_ac], 'best_ac': best_ac, 'time': [train_time, val_time]}
             best_ac = top1_val_ac
             # save model
             save_checkpoint(state, dst_folder, epoch)
             # logging
-            logging.info('\nEpoch: [{}|{}], train_loss: {}, train_ac: {}, top5_val_ac: {}, top1_val_ac: {}'.format(epoch, args.epoch, train_loss, train_ac, top5_val_ac, top1_val_ac))
+            logging.info('\nEpoch: [{}|{}], train_loss: {}, train_ac: {}, top5_val_ac: {}, top1_val_ac: {}, val_time: {}, train_time: {}'.format(epoch, args.epoch, train_loss, train_ac, top5_val_ac, top1_val_ac, val_time, train_time))
 
     save_fig(dst_folder)
     print('Best ac:%f'%best_ac)
 
 
-
-
-if __name__=="__main__":
+if __name__ == "__main__":
     args = parse_args()
     logging.info(args)
     # record

@@ -1,5 +1,6 @@
 import torchvision as tv
 import numpy as np
+from PIL import Image
 
 
 def get_dataset(args):
@@ -80,7 +81,7 @@ class Cifar10Train(tv.datasets.CIFAR10):
 
     def update_labels(self, result):
         # use the average output prob of the network of the past [epoch_update] epochs as s.
-        # update from [begin] epoches.
+        # update from [begin] epoch.
 
         idx = self._count % 10
         self.prediction[idx,:] = result
@@ -101,10 +102,25 @@ class Cifar10Train(tv.datasets.CIFAR10):
         self.labels = param['hard_labels']
         self.soft_labels = param['soft_labels']
 
+    def __getitem__(self, index):
+        img, labels, soft_labels = self.train_data[index], self.train_labels[index], self.soft_labels[index]
+
+        # doing this so that it is consistent with all other datasets.
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            labels = self.target_transform(labels)
+
+        return img, labels, soft_labels, index
+
+
 # val&test set can be reused.
 class Cifar10Val(tv.datasets.CIFAR10):
     def __init__(self, root, val_indexes, train=True, transform=None, target_transform=None, download=False):
         super(Cifar10Val, self).__init__(root, train=train, transform=transform, target_transform=target_transform, download=download)
         # self.train_labels & self.train_data are the attrs from tv.datasets.CIFAR10
-        self.train_labels = self.train_labels[val_indexes]
-        self.train_data = self.train_data[val_indexes]
+        self.val_labels = self.train_labels[val_indexes]
+        self.val_data = self.train_data[val_indexes]
