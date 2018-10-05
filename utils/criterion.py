@@ -35,17 +35,18 @@ def accuracy_v2(preds, labels, top=[1,5]):
 
     return result
 
-def joint_opt_loss(preds, soft_labels, device, args):
+def joint_opt_loss(preds, soft_labels, use_cuda, args):
     # introduce prior prob distribution p
-    p = torch.ones(10).to(device)
+    if use_cuda:
+        p = torch.ones(10).cuda() / 10
 
     prob = F.softmax(preds, dim=1)
     prob_avg = torch.mean(prob, dim=0)
 
     # ignore constant
-    L_c = -torch.mean(torch.sum(soft_labels * torch.log(prob), dim=1))
+    L_c = -torch.mean(torch.sum(soft_labels * F.log_softmax(preds, dim=1), dim=1))
     L_p = -torch.sum(torch.log(prob_avg) * p)
-    L_e = -torch.mean(torch.sum(prob * torch.log(prob), dim=1))
+    L_e = -torch.mean(torch.sum(prob * F.log_softmax(preds, dim=1), dim=1))
 
     loss = L_c + args.alpha * L_p + args.beta * L_e
     return prob, loss
