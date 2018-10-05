@@ -1,6 +1,6 @@
 # Joint Optimization Framework for Learning with Noisy Labels
 This is an implmentation for the paper [Joint Optimization Framework for Learning with Nosiy Labels](https://arxiv.org/pdf/1803.11364.pdf)<br>
-The official implementation is [Chainer](https://github.com/DaikiTanaka-UT/JointOptimization)<br>
+The official implementation is by Chainer.[here](https://github.com/DaikiTanaka-UT/JointOptimization)<br>
 ## Requirement<br>
 * Python 3.5 
 * Pytorch 0.4 & torchvision

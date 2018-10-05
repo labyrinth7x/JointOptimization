@@ -62,7 +62,7 @@ class Cifar10Train(tv.datasets.CIFAR10):
                 # train_labels[idxes[i]] -> another category
                 label_sym = np.random.randint(10, dtype=np.int32)
                 self.train_labels[idxes[i]] = label_sym
-            self.soft_labels[idxes[i]][label_sym] = 1
+            self.soft_labels[idxes[i]][self.train_labels[idxes[i]]] = 1
 
     def asymmetric_noise(self):
         # [airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
