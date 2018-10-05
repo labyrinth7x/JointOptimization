@@ -1,5 +1,5 @@
 # Joint Optimization Framework for Learning with Noisy Labels
-This is an implmentation for the paper [Joint Optimization Framework for Learning with Nosiy Labels](https://arxiv.org/pdf/1803.11364.pdf)/br>
+This is an implmentation for the paper [Joint Optimization Framework for Learning with Nosiy Labels](https://arxiv.org/pdf/1803.11364.pdf)<br>
 The official implementation is [Chainer](https://github.com/DaikiTanaka-UT/JointOptimization)<br>
 ## Requirement<br>
 * Python 3.5 
@@ -8,11 +8,11 @@ The official implementation is [Chainer](https://github.com/DaikiTanaka-UT/Joint
 * matplotlib (not necessary unless the need for the result figure)  
 ## Network<br>
 The backbone of the network is Resnet-34.<br>
-It is implemented in /utils/renset.py.<br>
+It is implemented in /models/renset.py.<br>
 Here only Resnet-34 and Resnet-18 is available.<br>
 ## Train  
 There are two steps to folllow.  
-* First: Train the noisy dataset and update labels.
+* First: Train the noisy dataset and update labels.<br>
 Train the network on the Symmetric Noise CIFAR-10 dataset:
 ```
 python train.py --out "./model_data/" --gpus 0 --noise_ratio 0.2 --alpha 0.8 --beta 0.4 --dataset_type "sym_noise"  
