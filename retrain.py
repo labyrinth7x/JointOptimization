@@ -2,8 +2,10 @@ import sys
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
+import torch.nn.functional as F
 import numpy as np
 import torchvision.transforms as transforms
+import torchvision
 import argparse
 import logging
 import os
@@ -117,7 +119,7 @@ def network_config(args):
     np.random.seed(manualSeed)
     torch.manual_seed(manualSeed)
     if use_cuda:
-        torch.cuda.manual_seed_all(args.manualSeed)
+        torch.cuda.manual_seed_all(manualSeed)
 
     return network, optimizer, use_cuda
 
@@ -240,7 +242,7 @@ def main(args, dst_folder):
 
     #save_fig(dst_folder)
     print('Best ac:%f'%best_ac)
-    record_result(dst_folder + '/config.txt', best_ac)
+    record_result(dst_folder, best_ac)
 
 
 if __name__ == "__main__":

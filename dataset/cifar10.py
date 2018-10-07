@@ -95,12 +95,13 @@ class Cifar10Train(tv.datasets.CIFAR10):
 
         # save params
         if self._count == self.args.epoch:
-            np.savez(self.dst, hard_labels=self.train_labels, soft_labels=self.soft_labels)
+            np.savez(self.dst, data=self.train_data, hard_labels=self.train_labels, soft_labels=self.soft_labels)
 
         self._count += 1
 
     def reload_labels(self):
         param = np.load(self.dst)
+        self.train_data = param['data']
         self.train_labels = param['hard_labels']
         self.soft_labels = param['soft_labels']
 
