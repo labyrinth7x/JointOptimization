@@ -8,9 +8,9 @@ import argparse
 import logging
 import os
 import time
-from dataset.cifar10 import get_dataset
+from dataset.cifar10 import Cifar10Train
 #from utils.visualize import save_fig
-from utils.criterion import accuracy_v2, joint_opt_loss
+from utils.criterion import accuracy_v2
 from utils.AverageMeter import AverageMeter
 import torch.utils.data as data
 from torch import optim
@@ -24,23 +24,26 @@ logger.setLevel(logging.INFO)
 def parse_args():
     parser = argparse.ArgumentParser(description='command for the first train')
     parser.add_argument('--lr', type=float, default=0.1,help='learning rate')
+    parser.add_argument('--lr_train', type=float, help='used for locate the root for updated labels')
     parser.add_argument('--batch_size', type=int, default=128, help='#images in each mini-batch')
     parser.add_argument('--epoch', type=int, default=200, help='training epoches')
     parser.add_argument('--wd', type=float, default=1e-4, help='weight decay')
     parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
     parser.add_argument('--dataset_type', default='sym_noise', help='noise type of the dataset')
     parser.add_argument('--train_root', default='./data/img_data/train', help='root for train data')
+    parser.add_argument('--test_root', default='./data/img_data/test', help='root for test data')
     parser.add_argument('--epoch_begin', default=70, help='the epoch to begin update labels')
     parser.add_argument('--epoch_update', default=10, help='#epoch to average to update soft labels')
     parser.add_argument('--noise_ratio', type=float, default=0.1, help='percent of noise')
     parser.add_argument('--gpus', type=str, default='0', help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--out', type=str, default='./data/model_data', help='Directory of the output')
-    parser.add_argument('--alpha', type=float, default=1.0, help='Hyper param for loss')
-    parser.add_argument('--beta', type=float, default=0.5, help='Hyper param for loss')
+    parser.add_argument('--alpha', type=float, default=1.0, help='used for locate the root for updated labels')
+    parser.add_argument('--beta', type=float, default=0.5, help='used for locate the root for the updated labels')
     parser.add_argument('--download', type=bool, default=False, help='download dataset')
     parser.add_argument('--network', type=str, default='resnet34', help='the backbone of the network')
     args = parser.parse_args()
     return args
+
 
 def data_config(args, dst_folder):
     transform_train = transforms.Compose([
@@ -49,26 +52,23 @@ def data_config(args, dst_folder):
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
-    transform_val = transforms.Compose([
+    transform_test = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        transforms.Normalize((0.4914, 0.4822, 0.4464), (0.2023, 0.1994, 0.2010))
     ])
-    train, val = get_dataset(args, transform_train, transform_val, dst_folder)
-    if args.dataset_type == 'sym_noise':
-        train.symmetric_noise()
-        print('-------> symmetric noise')
-    elif args.dataset_type == 'asym_noise':
-        train.asymmetric_noise()
-        print('-------> asymmetric noise')
+    train = Cifar10Train(args, dst_folder, train_indexes=None, train=True, transform=transform_train)
+    train.reload_labels()
+    print('-------> reload updated labels from the first training')
     train_loader = data.DataLoader(train, batch_size=args.batch_size, shuffle=True, num_workers=4)
-    val_loader = data.DataLoader(val, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    test = torchvision.datasets.CIFAR10(args.test_root, train=False, transform=transform_test)
+    test_loader = data.DataLoader(test, batch_size=args.batch_size, shuffle=False, num_workers=4)
     print('-------> Data loading')
-    return train_loader, val_loader
+    return train_loader, test_loader
 
 
 def record_params(args):
-    dst_folder = args.out + '/' + args.dataset_type + '-lr-{}-ratio-{}-alpha-{}-beta-{}-{}'.format(args.lr, args.noise_ratio, args.alpha, args.beta, args.network)
-    dst_folder = dst_folder + '/first_train'
+    dst_folder = args.out + '/' + args.dataset_type + '-lr-{}-ratio-{}-alpha-{}-beta-{}-{}'.format(args.lr_train, args.noise_ratio, args.alpha, args.beta, args.network)
+    dst_folder = dst_folder + '/second_train'
     if not os.path.exists(dst_folder):
         os.makedirs(dst_folder)
 
@@ -93,7 +93,7 @@ def record_params(args):
 def record_result(dst_folder, best_ac):
     dst = dst_folder + '/config.txt'
     rd = open(dst, 'a+')
-    rd.write('first_train:best_ac:%.3f'%best_ac + '\n')
+    rd.write('second_train:best_ac:%.3f'%best_ac + '\n')
     rd.close()
 
 
@@ -117,7 +117,7 @@ def network_config(args):
     np.random.seed(manualSeed)
     torch.manual_seed(manualSeed)
     if use_cuda:
-        torch.cuda.manual_seed_all(manualSeed)
+        torch.cuda.manual_seed_all(args.manualSeed)
 
     return network, optimizer, use_cuda
 
@@ -125,6 +125,16 @@ def network_config(args):
 def save_checkpoint(state, dst_folder, epoch):
     dst = dst_folder + '/epoch-' + str(epoch) + '.pkl'
     torch.save(state, dst)
+
+def adjust_lr(args, optimizer, epoch):
+    if epoch in [int(args.epoch / 3), int(args.epoch * 2 / 3)]:
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= 0.1
+        logging.info('--------> adjusting learning rate')
+
+def kl_loss(preds, soft_labels):
+    loss = -torch.mean(torch.sum(F.log_softmax(preds, dim=1) * soft_labels, dim=1))
+    return loss
 
 
 def train(train_loader, network, optimizer, use_cuda, args):
@@ -137,7 +147,7 @@ def train(train_loader, network, optimizer, use_cuda, args):
     network.train()
 
     end = time.time()
-
+    
     results = np.zeros((len(train_loader.dataset), 10), dtype=np.float32)
     for images, labels, soft_labels, index in train_loader:
         if use_cuda:
@@ -148,8 +158,7 @@ def train(train_loader, network, optimizer, use_cuda, args):
         
         # compute output
         outputs = network(images)
-        prob, loss = joint_opt_loss(outputs, soft_labels, use_cuda, args)
-        results[index.cpu().detach().numpy().tolist()] = prob.cpu().detach().numpy().tolist()
+        loss = kl_loss(outputs, soft_labels)
 
         prec1, prec5 = accuracy_v2(outputs, labels, top=[1,5])
         train_loss.update(loss.item(), images.size(0))
@@ -165,26 +174,24 @@ def train(train_loader, network, optimizer, use_cuda, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-    # update soft labels
-    train_loader.dataset.update_labels(results)
     return train_loss.avg, top5.avg, top1.avg, batch_time.sum
 
 
-def validate(val_loader, network, criterion, use_cuda):
+def test(test_loader, network, criterion, use_cuda):
     """
     Run evaluation
     """
     batch_time = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
-    val_loss = AverageMeter()
+    test_loss = AverageMeter()
 
     # switch to evaluate mode
     network.eval()
 
     with torch.no_grad():
         end = time.time()
-        for images, labels in val_loader:
+        for images, labels in test_loader:
             if use_cuda:
                 images = images.cuda()
                 labels = labels.cuda(non_blocking=True)
@@ -194,7 +201,7 @@ def validate(val_loader, network, criterion, use_cuda):
 
             top1.update(prec1.item(), images.size(0))
             top5.update(prec5.item(), images.size(0))
-            val_loss.update(loss.item(), images.size(0))
+            test_loss.update(loss.item(), images.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -204,35 +211,36 @@ def validate(val_loader, network, criterion, use_cuda):
 
 
 def main(args, dst_folder):
-    # best_ac only record the best top1_ac for validation set.
+    # best_ac only record the best top1_ac for test set.
     best_ac = 0.0
 
     # data lodaer
-    train_loader, val_loader = data_config(args, dst_folder)
+    train_loader, test_loader = data_config(args, dst_folder)
 
     # criterion
-    val_criterion = nn.CrossEntropyLoss()
+    test_criterion = nn.CrossEntropyLoss()
 
     # network config
     network, optimizer, use_cuda = network_config(args)
 
     for epoch in range(args.epoch):
         # train for one epoch
+        adjust_lr(args, optimizer, epoch)
         train_loss, top_5_train_ac, top1_train_ac, train_time = train(train_loader, network, optimizer, use_cuda, args)
-        # evaluate on validation set
-        top5_val_ac, top1_val_ac, val_time = validate(val_loader, network, val_criterion, use_cuda)
+        # evaluate on test set
+        top5_test_ac, top1_test_ac, test_time = test(test_loader, network, test_criterion, use_cuda)
         # remember best prec@1, save checkpoint and logging to the console.
-        if top1_val_ac >= best_ac:
-            state = {'state_dict': network.state_dict(), 'epoch': epoch, 'ac': [top5_val_ac, top1_val_ac], 'best_ac': best_ac, 'time': [train_time, val_time]}
-            best_ac = top1_val_ac
+        if top1_test_ac >= best_ac:
+            state = {'state_dict': network.state_dict(), 'epoch': epoch, 'ac': [top5_test_ac, top1_test_ac], 'best_ac': best_ac, 'time': [train_time, test_time]}
+            best_ac = top1_test_ac
             # save model
             save_checkpoint(state, dst_folder, epoch)
             # logging
-        logging.info('Epoch: [{}|{}], train_loss: {:.3f}, top1_train_ac: {:.3f}, top5_val_ac: {:.3f}, top1_val_ac: {:.3f}, val_time: {:.3f}, train_time: {:.3f}'.format(epoch, args.epoch, train_loss, top1_train_ac, top5_val_ac, top1_val_ac, val_time, train_time))
+        logging.info('Epoch: [{}|{}], train_loss: {:.3f}, top1_train_ac: {:.3f}, top5_test_ac: {:.3f}, top1_test_ac: {:.3f}, test_time: {:.3f}, train_time: {:.3f}'.format(epoch, args.epoch, train_loss, top1_train_ac, top5_test_ac, top1_test_ac, test_time, train_time))
 
     #save_fig(dst_folder)
     print('Best ac:%f'%best_ac)
-    record_result(dst_folder, best_ac)
+    record_result(dst_folder + '/config.txt', best_ac)
 
 
 if __name__ == "__main__":

@@ -3,14 +3,13 @@ import numpy as np
 from PIL import Image
 
 
-def get_dataset(args, transform_train, transform_val):
+def get_dataset(args, transform_train, transform_val, dst_folder):
     # prepare datasets
     cifar10_train_val = tv.datasets.CIFAR10(args.train_root, train=True, download=args.download)
-    cifar10_test = tv.datasets.CIFAR10(args.test_root, train=False, download=args.download)
 
     # get train/val dataset
     train_indexes, val_indexes = train_val_split(cifar10_train_val.train_labels, 0.9)
-    train = Cifar10Train(args, train_indexes, train=True, transform=transform_train)
+    train = Cifar10Train(args, dst_folder, train_indexes, train=True, transform=transform_train)
     if args.dataset_type == 'sym_noise':
         train.symmetric_noise()
     elif args.dataset_type == 'asym_noise':
@@ -18,10 +17,9 @@ def get_dataset(args, transform_train, transform_val):
     else:
         train.pseudo_labels()
 
-    val = Cifar10Val(args.train_root, train_indexes, train=True, transform=transform_val)
-    test = Cifar10Test(args.test_root, train=False)
+    val = Cifar10Val(args.train_root, val_indexes, train=True, transform=transform_val)
 
-    return train, val, test
+    return train, val
 
 
 def train_val_split(train_val, ratio):
@@ -44,15 +42,17 @@ def train_val_split(train_val, ratio):
 
 class Cifar10Train(tv.datasets.CIFAR10):
     # including hard labels & soft labels
-    def __init__(self, args, train_indexes, train=True, transform=None, target_transform=None, download=False):
+    def __init__(self, args, dst_folder, train_indexes=None, train=True, transform=None, target_transform=None, download=False):
         super(Cifar10Train, self).__init__(args.train_root, train=train, transform=transform, target_transform=target_transform, download=download)
         self.args = args
-        self.train_data = self.train_data[train_indexes]
-        self.train_labels = np.array(self.train_labels)[train_indexes]
+        if train_indexes is not None:
+            self.train_data = self.train_data[train_indexes]
+            self.train_labels = np.array(self.train_labels)[train_indexes]
         self.soft_labels = np.zeros((len(self.train_labels), 10), dtype=np.float32)
         self.prediction = np.zeros((self.args.epoch_update, len(self.train_data), 10) ,dtype=np.float32)
         self._num = int(len(self.train_labels) * args.noise_ratio)
-        self._count = 0
+        self._count = 1
+        self.dst = dst_folder.replace('second','first') + '/labels.npz'
 
     def symmetric_noise(self):
         # to be more equal, every category can be processed separately
@@ -95,12 +95,12 @@ class Cifar10Train(tv.datasets.CIFAR10):
 
         # save params
         if self._count == self.args.epoch:
-            np.savez(self.args.dst, hard_labels=self.train_labels, soft_labels=self.soft_labels)
+            np.savez(self.dst, hard_labels=self.train_labels, soft_labels=self.soft_labels)
 
         self._count += 1
 
     def reload_labels(self):
-        param = np.load(self.args.dst)
+        param = np.load(self.dst)
         self.train_labels = param['hard_labels']
         self.soft_labels = param['soft_labels']
 
@@ -124,10 +124,3 @@ class Cifar10Val(tv.datasets.CIFAR10):
         # self.train_labels & self.train_data are the attrs from tv.datasets.CIFAR10
         self.val_labels = np.array(self.train_labels)[val_indexes]
         self.val_data = self.train_data[val_indexes]
-
-
-class Cifar10Test(tv.datasets.CIFAR10):
-    def __init__(self, root, train=False, transform=None, target_transform=None, download=False):
-        super(Cifar10Test, self).__init__(root, train=train, transform=transform, target_transform=target_transform, download=download)
-        self.test_labels = np.array(self.test_labels)
-        self.test_data = self.test_data
